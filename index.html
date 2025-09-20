@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <title>Manajemen Persediaan - UMKM Makanan Sehat</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial; background:#f7fafc; margin:0; padding:24px}
+    .container{max-width:1000px;margin:0 auto}
+    header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
+    .card{background:#fff;border-radius:8px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,0.08)}
+    button{cursor:pointer}
+    .btn{padding:8px 12px;border-radius:6px;border:1px solid #ccc;background:#fff}
+    .btn-primary{background:#16a34a;color:#fff;border:none}
+    input,select{padding:8px;border:1px solid #d1d5db;border-radius:6px}
+    table{width:100%;border-collapse:collapse}
+    th,td{padding:8px;border-bottom:1px solid #eef2f7;text-align:left}
+    .small{font-size:13px;color:#6b7280}
+    .flex{display:flex;gap:8px;align-items:center}
+    .alert{background:#fffbeb;border-left:4px solid #f59e0b;padding:10px;border-radius:6px;margin-bottom:12px}
+    .chart{height:180px;display:flex;align-items:flex-end;gap:8px;padding-top:12px}
+    .bar{width:40px;text-align:center}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div>
+        <h1>Manajemen Persediaan - UMKM Makanan Sehat</h1>
+        <div class="small">Kelola bahan, pantau stok rendah, catat penggunaan & pembelian.</div>
+      </div>
+      <div class="flex">
+        <button id="addBtn" class="btn btn-primary">Tambah Bahan</button>
+        <button id="exportBtn" class="btn">Export CSV</button>
+      </div>
+    </header>
+
+    <div id="alertLow"></div>
+
+    <div style="display:grid;grid-template-columns:1fr 320px;gap:16px">
+      <div>
+        <div class="card" style="margin-bottom:12px;display:flex;gap:8px">
+          <input id="search" placeholder="Cari nama bahan atau supplier..." style="flex:1" />
+          <select id="filter"></select>
+          <select id="sort">
+            <option value="name">Urut: Nama</option>
+            <option value="stock">Urut: Stok (tinggi ke rendah)</option>
+          </select>
+        </div>
+
+        <div class="card">
+          <table id="table">
+            <thead><tr><th>Bahan</th><th>Stok</th><th>Satuan</th><th>Min</th><th>Supplier</th><th>Aksi</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <aside class="card">
+        <h3>Ringkasan</h3>
+        <div class="small">Total bahan: <span id="totalCount">0</span></div>
+        <div class="small">Bahan rendah stok: <span id="lowCount">0</span></div>
+        <div style="margin-top:12px">
+          <div id="chartArea" class="chart"></div>
+        </div>
+        <div style="margin-top:12px">
+          <button id="resetBtn" class="btn" style="width:100%">Reset ke contoh</button>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <!-- Modal -->
+  <div id="modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);align-items:center;justify-content:center">
+    <div style="background:#fff;padding:16px;border-radius:8px;max-width:520px;width:100%">
+      <h3 id="modalTitle">Tambah Bahan</h3>
+      <form id="form" style="display:grid;gap:8px;margin-top:8px">
+        <input id="name" placeholder="Nama bahan" required />
+        <input id="category" placeholder="Kategori (mis. Bahan Kering)" />
+        <div style="display:flex;gap:8px">
+          <input id="stock" type="number" placeholder="Stok" style="flex:1" />
+          <input id="unit" placeholder="Satuan (kg/pcs/ltr)" style="width:120px" />
+        </div>
+        <div style="display:flex;gap:8px">
+          <input id="minStock" type="number" placeholder="Stok minimum" style="flex:1" />
+          <input id="supplier" placeholder="Supplier" style="width:140px" />
+        </div>
+        <input id="notes" placeholder="Keterangan / catatan" />
+        <div style="display:flex;justify-content:flex-end;gap:8px">
+          <button type="button" id="cancel" class="btn">Batal</button>
+          <button type="submit" class="btn btn-primary">Simpan</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+<script>
+  const LS_KEY = 'umkm_inventory_simple_v1';
+  const sample = [
+    {id:uid(), name:'Tepung Terigu', category:'Bahan Kering', stock:50, unit:'kg', minStock:10, supplier:'CV. Agro', notes:'Protein tinggi'},
+    {id:uid(), name:'Gula Aren', category:'Pemanis', stock:20, unit:'kg', minStock:5, supplier:'UD. Manis', notes:'Organik'},
+    {id:uid(), name:'Minyak Goreng', category:'Bahan Cair', stock:15, unit:'ltr', minStock:8, supplier:'PT. Minyak', notes:'Refined'}
+  ];
+  function uid(){ return Math.random().toString(36).slice(2,9) }
+
+  let items = load();
+  const tableBody = document.querySelector('#table tbody');
+  const filterEl = document.getElementById('filter');
+  const searchEl = document.getElementById('search');
+  const sortEl = document.getElementById('sort');
+  const alertLow = document.getElementById('alertLow');
+  const totalCount = document.getElementById('totalCount');
+  const lowCount = document.getElementById('lowCount');
+  const chartArea = document.getElementById('chartArea');
+  const modal = document.getElementById('modal');
+  const form = document.getElementById('form');
+  const modalTitle = document.getElementById('modalTitle');
+  let editingId = null;
+
+  function load(){
+    try{
+      const raw = localStorage.getItem(LS_KEY);
+      if(!raw){ localStorage.setItem(LS_KEY, JSON.stringify(sample)); return [...sample]; }
+      return JSON.parse(raw);
+    }catch(e){ localStorage.removeItem(LS_KEY); localStorage.setItem(LS_KEY, JSON.stringify(sample)); return [...sample]; }
+  }
+  function save(){ localStorage.setItem(LS_KEY, JSON.stringify(items)); render(); }
+
+  function render(){
+    const cats = ['Semua', ...Array.from(new Set(items.map(i=>i.category||'(Lainnya)')))];
+    filterEl.innerHTML = cats.map(c=>`<option value="${c}">${c}</option>`).join('');
+
+    const q = searchEl.value.trim().toLowerCase();
+    const filter = filterEl.value || 'Semua';
+    let list = items.filter(i => (filter==='Semua' || (i.category||'(Lainnya)')===filter))
+                    .filter(i => i.name.toLowerCase().includes(q) || (i.supplier||'').toLowerCase().includes(q));
+
+    if(sortEl.value==='stock') list.sort((a,b)=>b.stock - a.stock);
+    else list.sort((a,b)=>a.name.localeCompare(b.name));
+
+    tableBody.innerHTML = list.map(it => `
+      <tr>
+        <td><div style="font-weight:600">${escapeHtml(it.name)}</div><div class="small">${escapeHtml(it.category)} • ${escapeHtml(it.notes)}</div></td>
+        <td>${it.stock}</td>
+        <td>${escapeHtml(it.unit)}</td>
+        <td>${it.minStock||0}</td>
+        <td>${escapeHtml(it.supplier)}</td>
+        <td>
+          <div style="display:flex;gap:6px">
+            <button onclick="changeStock('${it.id}',-1)" class="btn">-1</button>
+            <button onclick="changeStock('${it.id}',1)" class="btn">+1</button>
+            <button onclick="editItem('${it.id}')" class="btn">Edit</button>
+            <button onclick="removeItem('${it.id}')" class="btn" style="background:#fee2e2">Hapus</button>
+          </div>
+        </td>
+      </tr>
+    `).join('') || '<tr><td colspan="6" style="text-align:center;padding:12px;color:#6b7280">Tidak ada data</td></tr>';
+
+    const low = items.filter(i => Number(i.stock) <= Number(i.minStock || 0));
+    alertLow.innerHTML = low.length>0 ? `<div class="alert"><strong>Peringatan:</strong> ${low.length} bahan mencapai atau di bawah stok minimum. Segera restock.</div>` : '';
+    totalCount.textContent = items.length;
+    lowCount.textContent = low.length;
+
+    const map = items.reduce((m,it)=>{ const k=it.category||'(Lainnya)'; m[k]=(m[k]||0)+Number(it.stock); return m },{});
+    chartArea.innerHTML = '';
+    const values = Object.values(map);
+    const max = values.length ? Math.max(...values) : 1;
+    Object.entries(map).forEach(([name,st])=>{
+      const h = Math.round((st/max)*120) + 'px';
+      const div = document.createElement('div');
+      div.className='bar';
+      div.innerHTML = `<div style="height:${h};background:#60a5fa;border-radius:4px"></div><div class="small">${escapeHtml(name)}</div><div class="small" style="margin-top:6px">${st}</div>`;
+      chartArea.appendChild(div);
+    });
+  }
+
+  function escapeHtml(s){ return (s+'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') }
+  function changeStock(id, delta){ items = items.map(i => i.id===id ? {...i, stock: Math.max(0, Number(i.stock)+Number(delta))} : i); save(); }
+  function removeItem(id){ if(confirm('Hapus bahan ini?')){ items = items.filter(i=>i.id!==id); save(); } }
+  function editItem(id){ const it = items.find(i=>i.id===id); if(it) openModal(it); }
+
+  function openModal(it){
+    editingId = it ? it.id : null;
+    modalTitle.textContent = editingId ? 'Edit Bahan' : 'Tambah Bahan';
+    document.getElementById('name').value = it?.name || '';
+    document.getElementById('category').value = it?.category || '';
+    document.getElementById('stock').value = it?.stock ?? 0;
+    document.getElementById('unit').value = it?.unit || 'pcs';
+    document.getElementById('minStock').value = it?.minStock ?? 0;
+    document.getElementById('supplier').value = it?.supplier || '';
+    document.getElementById('notes').value = it?.notes || '';
+    modal.style.display = 'flex';
+  }
+  function closeModal(){ modal.style.display = 'none'; editingId = null; }
+
+  form.addEventListener('submit', function(e){
+    e.preventDefault();
+    const data = {
+      id: editingId || uid(),
+      name: document.getElementById('name').value.trim(),
+      category: document.getElementById('category').value.trim(),
+      stock: Math.max(0, Number(document.getElementById('stock').value) || 0),
+      unit: document.getElementById('unit').value.trim() || 'pcs',
+      minStock: Math.max(0, Number(document.getElementById('minStock').value) || 0),
+      supplier: document.getElementById('supplier').value.trim(),
+      notes: document.getElementById('notes').value.trim()
+    };
+    if(!data.name){ alert('Nama bahan harus diisi'); return; }
+    if(editingId){ items = items.map(i => i.id===editingId ? data : i); } else { items.unshift(data); }
+    save(); closeModal();
+  });
+
+  document.getElementById('addBtn').addEventListener('click', ()=>openModal());
+  document.getElementById('exportBtn').addEventListener('click', exportCSV);
+  document.getElementById('resetBtn').addEventListener('click', ()=>{ if(confirm('Reset data ke contoh?')){ localStorage.removeItem(LS_KEY); items=[...sample]; save(); }});
+  document.getElementById('cancel').addEventListener('click', closeModal);
+  searchEl.addEventListener('input', render);
+  sortEl.addEventListener('change', render);
+  filterEl.addEventListener('change', render);
+  modal.addEventListener('click', e => { if(e.target===modal) closeModal(); });
+
+  function exportCSV(){
+    const header = ['id','name','category','stock','unit','minStock','supplier','notes'];
+    const rows = items.map(i => header.map(h => `"${(i[h]||'').toString().replace(/\"/g,'""')}"`).join(','));
+    const csv = [header.join(','), ...rows].join('\r\n');
+    const blob = new Blob([csv], {type:'text/csv'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href=url; a.download='inventory_umkm.csv'; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  render();
+</script>
+</body>
+</html>
